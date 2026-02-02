@@ -96,11 +96,22 @@ public class AnimatedNumberLabel: UIView {
         }
     }
 
+    /// The number of lines. Set to 0 for unlimited lines. Defaults to 1.
+    public var numberOfLines: Int = 1
+
+    /// Line spacing between multiple lines. Defaults to 0.
+    public var lineSpacing: CGFloat = 0 {
+        didSet {
+            mainStackView.spacing = lineSpacing
+        }
+    }
+
     // MARK: - Private Properties
 
-    private let containerStackView: UIStackView = {
+    /// Main vertical stack view that contains line stack views.
+    private let mainStackView: UIStackView = {
         let stack = UIStackView()
-        stack.axis = .horizontal
+        stack.axis = .vertical
         stack.alignment = .fill
         stack.distribution = .fill
         stack.spacing = 0
@@ -108,7 +119,16 @@ public class AnimatedNumberLabel: UIView {
         return stack
     }()
 
-    private var characterContainers: [CharacterContainerView] = []
+    /// Each line has its own horizontal stack view.
+    private var lineStackViews: [UIStackView] = []
+
+    /// All character containers across all lines, stored by line.
+    private var characterContainersByLine: [[CharacterContainerView]] = []
+
+    /// Flattened array of all character containers for easy access.
+    private var characterContainers: [CharacterContainerView] {
+        return characterContainersByLine.flatMap { $0 }
+    }
 
     private var leadingConstraint: NSLayoutConstraint?
     private var trailingConstraint: NSLayoutConstraint?
@@ -130,15 +150,15 @@ public class AnimatedNumberLabel: UIView {
 
     private func setupView() {
         clipsToBounds = true
-        addSubview(containerStackView)
+        addSubview(mainStackView)
 
-        leadingConstraint = containerStackView.leadingAnchor.constraint(equalTo: leadingAnchor)
-        trailingConstraint = containerStackView.trailingAnchor.constraint(equalTo: trailingAnchor)
-        centerXConstraint = containerStackView.centerXAnchor.constraint(equalTo: centerXAnchor)
+        leadingConstraint = mainStackView.leadingAnchor.constraint(equalTo: leadingAnchor)
+        trailingConstraint = mainStackView.trailingAnchor.constraint(equalTo: trailingAnchor)
+        centerXConstraint = mainStackView.centerXAnchor.constraint(equalTo: centerXAnchor)
 
         NSLayoutConstraint.activate([
-            containerStackView.topAnchor.constraint(equalTo: topAnchor),
-            containerStackView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            mainStackView.topAnchor.constraint(equalTo: topAnchor),
+            mainStackView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
         updateAlignment()
@@ -152,16 +172,41 @@ public class AnimatedNumberLabel: UIView {
         switch textAlignment {
         case .left, .natural:
             leadingConstraint?.isActive = true
+            for lineStack in lineStackViews {
+                lineStack.alignment = .leading
+            }
         case .right:
             trailingConstraint?.isActive = true
+            for lineStack in lineStackViews {
+                lineStack.alignment = .trailing
+            }
         case .center:
             centerXConstraint?.isActive = true
+            for lineStack in lineStackViews {
+                lineStack.alignment = .center
+            }
         case .justified:
             leadingConstraint?.isActive = true
             trailingConstraint?.isActive = true
+            for lineStack in lineStackViews {
+                lineStack.alignment = .fill
+            }
         @unknown default:
             leadingConstraint?.isActive = true
+            for lineStack in lineStackViews {
+                lineStack.alignment = .leading
+            }
         }
+    }
+
+    private func createLineStackView() -> UIStackView {
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.alignment = .fill
+        stack.distribution = .fill
+        stack.spacing = 0
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
     }
 
     // MARK: - Public Methods
@@ -222,32 +267,86 @@ public class AnimatedNumberLabel: UIView {
 
     // MARK: - Private Methods
 
+    private func clearAllContainers() {
+        for containers in characterContainersByLine {
+            containers.forEach { $0.removeFromSuperview() }
+        }
+        characterContainersByLine.removeAll()
+
+        for lineStack in lineStackViews {
+            lineStack.removeFromSuperview()
+        }
+        lineStackViews.removeAll()
+    }
+
     private func rebuildLabels(for text: String) {
         attributedText = nil
-        // Remove all existing containers
-        characterContainers.forEach { $0.removeFromSuperview() }
-        characterContainers.removeAll()
+        clearAllContainers()
 
-        // Create new containers for each character
-        for char in text {
-            let container = createCharacterContainer(for: String(char))
-            containerStackView.addArrangedSubview(container)
-            characterContainers.append(container)
+        // Split text into lines
+        let lines = text.components(separatedBy: "\n")
+
+        for (lineIndex, line) in lines.enumerated() {
+            // Respect numberOfLines limit (0 means unlimited)
+            if numberOfLines > 0 && lineIndex >= numberOfLines {
+                break
+            }
+
+            let lineStack = createLineStackView()
+            mainStackView.addArrangedSubview(lineStack)
+            lineStackViews.append(lineStack)
+
+            var lineContainers: [CharacterContainerView] = []
+
+            for char in line {
+                let container = createCharacterContainer(for: String(char))
+                lineStack.addArrangedSubview(container)
+                lineContainers.append(container)
+            }
+
+            characterContainersByLine.append(lineContainers)
         }
+
+        updateAlignment()
     }
 
     private func rebuildLabelsWithAttributedText(_ attributedText: NSAttributedString) {
-        // Remove all existing containers
-        characterContainers.forEach { $0.removeFromSuperview() }
-        characterContainers.removeAll()
+        clearAllContainers()
 
-        // Create new containers for each character with its attributes
-        attributedText.string.enumerated().forEach { index, char in
-            let charAttributedString = attributedText.attributedSubstring(from: NSRange(location: index, length: 1))
-            let container = createCharacterContainer(withAttributedText: charAttributedString)
-            containerStackView.addArrangedSubview(container)
-            characterContainers.append(container)
+        // Split text into lines
+        let text = attributedText.string
+        let lines = text.components(separatedBy: "\n")
+        var currentIndex = 0
+
+        for (lineIndex, line) in lines.enumerated() {
+            // Respect numberOfLines limit (0 means unlimited)
+            if numberOfLines > 0 && lineIndex >= numberOfLines {
+                break
+            }
+
+            let lineStack = createLineStackView()
+            mainStackView.addArrangedSubview(lineStack)
+            lineStackViews.append(lineStack)
+
+            var lineContainers: [CharacterContainerView] = []
+
+            for char in line {
+                let charAttributedString = attributedText.attributedSubstring(from: NSRange(location: currentIndex, length: 1))
+                let container = createCharacterContainer(withAttributedText: charAttributedString)
+                lineStack.addArrangedSubview(container)
+                lineContainers.append(container)
+                currentIndex += 1
+            }
+
+            characterContainersByLine.append(lineContainers)
+
+            // Skip the newline character
+            if lineIndex < lines.count - 1 {
+                currentIndex += 1 // Skip \n
+            }
         }
+
+        updateAlignment()
     }
 
     private func createCharacterContainer(for character: String) -> CharacterContainerView {
@@ -325,6 +424,14 @@ public class AnimatedNumberLabel: UIView {
     }
 
     private func animateTextChange(from oldText: String, to newText: String, completion: (() -> Void)?) {
+        // For multiline text, use rebuild animation
+        let oldHasNewline = oldText.contains("\n")
+        let newHasNewline = newText.contains("\n")
+        if oldHasNewline || newHasNewline {
+            rebuildWithAnimation(to: newText, completion: completion)
+            return
+        }
+
         let oldChars = Array(oldText)
         let newChars = Array(newText)
 
@@ -354,8 +461,8 @@ public class AnimatedNumberLabel: UIView {
             return
         }
 
-        // Adjust containers if needed
-        adjustContainerCount(to: newChars.count)
+        // Adjust containers if needed (single line only)
+        adjustContainerCountForSingleLine(to: newChars.count)
 
         // Animate changed characters
         let animationGroup = DispatchGroup()
@@ -383,8 +490,17 @@ public class AnimatedNumberLabel: UIView {
     }
 
     private func animateAttributedTextChange(from oldText: String, to newAttributedText: NSAttributedString, completion: (() -> Void)?) {
-        let oldChars = Array(oldText)
         let newText = newAttributedText.string
+
+        // For multiline text, use rebuild animation
+        let oldHasNewline = oldText.contains("\n")
+        let newHasNewline = newText.contains("\n")
+        if oldHasNewline || newHasNewline {
+            rebuildWithAttributedAnimation(to: newAttributedText, completion: completion)
+            return
+        }
+
+        let oldChars = Array(oldText)
         let newChars = Array(newText)
 
         // Find the differences
@@ -413,8 +529,8 @@ public class AnimatedNumberLabel: UIView {
             return
         }
 
-        // Adjust containers if needed
-        adjustContainerCount(to: newChars.count)
+        // Adjust containers if needed (single line only)
+        adjustContainerCountForSingleLine(to: newChars.count)
 
         // Animate changed characters
         let animationGroup = DispatchGroup()
@@ -442,17 +558,34 @@ public class AnimatedNumberLabel: UIView {
         }
     }
 
-    private func adjustContainerCount(to count: Int) {
-        while characterContainers.count > count {
-            if let last = characterContainers.popLast() {
+    private func adjustContainerCountForSingleLine(to count: Int) {
+        // Ensure we have at least one line
+        if lineStackViews.isEmpty {
+            let lineStack = createLineStackView()
+            mainStackView.addArrangedSubview(lineStack)
+            lineStackViews.append(lineStack)
+            characterContainersByLine.append([])
+        }
+
+        guard let lineStack = lineStackViews.first else { return }
+        var containers = characterContainersByLine.first ?? []
+
+        while containers.count > count {
+            if let last = containers.popLast() {
                 last.removeFromSuperview()
             }
         }
 
-        while characterContainers.count < count {
+        while containers.count < count {
             let container = createCharacterContainer(for: "")
-            containerStackView.addArrangedSubview(container)
-            characterContainers.append(container)
+            lineStack.addArrangedSubview(container)
+            containers.append(container)
+        }
+
+        if characterContainersByLine.isEmpty {
+            characterContainersByLine.append(containers)
+        } else {
+            characterContainersByLine[0] = containers
         }
     }
 
@@ -572,19 +705,46 @@ public class AnimatedNumberLabel: UIView {
 
     private func rebuildWithAttributedAnimation(to newAttributedText: NSAttributedString, shouldRollUp: Bool = true, completion: (() -> Void)?) {
         let oldContainers = characterContainers
-        characterContainers = []
+        let oldLineStacks = lineStackViews
 
         let rollUp = (rollDirection == .down) ? false : shouldRollUp
 
+        // Clear and rebuild
+        characterContainersByLine = []
+        lineStackViews = []
+
         // Create new containers with attributed text
-        newAttributedText.string.enumerated().forEach { index, _ in
-            let charAttributedString = newAttributedText.attributedSubstring(from: NSRange(location: index, length: 1))
-            let container = createCharacterContainer(withAttributedText: charAttributedString)
-            container.alpha = 0
-            let initialOffset = rollUp ? bounds.height / 2 : -bounds.height / 2
-            container.transform = CGAffineTransform(translationX: 0, y: initialOffset)
-            containerStackView.addArrangedSubview(container)
-            characterContainers.append(container)
+        let text = newAttributedText.string
+        let lines = text.components(separatedBy: "\n")
+        var currentIndex = 0
+
+        for (lineIndex, line) in lines.enumerated() {
+            if numberOfLines > 0 && lineIndex >= numberOfLines {
+                break
+            }
+
+            let lineStack = createLineStackView()
+            mainStackView.addArrangedSubview(lineStack)
+            lineStackViews.append(lineStack)
+
+            var lineContainers: [CharacterContainerView] = []
+
+            for _ in line {
+                let charAttributedString = newAttributedText.attributedSubstring(from: NSRange(location: currentIndex, length: 1))
+                let container = createCharacterContainer(withAttributedText: charAttributedString)
+                container.alpha = 0
+                let initialOffset = rollUp ? bounds.height / 2 : -bounds.height / 2
+                container.transform = CGAffineTransform(translationX: 0, y: initialOffset)
+                lineStack.addArrangedSubview(container)
+                lineContainers.append(container)
+                currentIndex += 1
+            }
+
+            characterContainersByLine.append(lineContainers)
+
+            if lineIndex < lines.count - 1 {
+                currentIndex += 1 // Skip \n
+            }
         }
 
         UIView.animate(withDuration: animationDuration, delay: 0, options: animationCurve, animations: {
@@ -601,24 +761,46 @@ public class AnimatedNumberLabel: UIView {
             }
         }, completion: { _ in
             oldContainers.forEach { $0.removeFromSuperview() }
+            oldLineStacks.forEach { $0.removeFromSuperview() }
+            self.updateAlignment()
             completion?()
         })
     }
 
     private func rebuildWithAnimation(to newText: String, shouldRollUp: Bool = true, completion: (() -> Void)?) {
         let oldContainers = characterContainers
-        characterContainers = []
+        let oldLineStacks = lineStackViews
 
         let rollUp = (rollDirection == .down) ? false : shouldRollUp
 
-        // Create new containers
-        for char in newText {
-            let container = createCharacterContainer(for: String(char))
-            container.alpha = 0
-            let initialOffset = rollUp ? bounds.height / 2 : -bounds.height / 2
-            container.transform = CGAffineTransform(translationX: 0, y: initialOffset)
-            containerStackView.addArrangedSubview(container)
-            characterContainers.append(container)
+        // Clear and rebuild
+        characterContainersByLine = []
+        lineStackViews = []
+
+        // Split into lines and create containers
+        let lines = newText.components(separatedBy: "\n")
+
+        for (lineIndex, line) in lines.enumerated() {
+            if numberOfLines > 0 && lineIndex >= numberOfLines {
+                break
+            }
+
+            let lineStack = createLineStackView()
+            mainStackView.addArrangedSubview(lineStack)
+            lineStackViews.append(lineStack)
+
+            var lineContainers: [CharacterContainerView] = []
+
+            for char in line {
+                let container = createCharacterContainer(for: String(char))
+                container.alpha = 0
+                let initialOffset = rollUp ? bounds.height / 2 : -bounds.height / 2
+                container.transform = CGAffineTransform(translationX: 0, y: initialOffset)
+                lineStack.addArrangedSubview(container)
+                lineContainers.append(container)
+            }
+
+            characterContainersByLine.append(lineContainers)
         }
 
         UIView.animate(withDuration: animationDuration, delay: 0, options: animationCurve, animations: {
@@ -635,6 +817,8 @@ public class AnimatedNumberLabel: UIView {
             }
         }, completion: { _ in
             oldContainers.forEach { $0.removeFromSuperview() }
+            oldLineStacks.forEach { $0.removeFromSuperview() }
+            self.updateAlignment()
             completion?()
         })
     }
@@ -650,7 +834,7 @@ public class AnimatedNumberLabel: UIView {
     // MARK: - Intrinsic Content Size
 
     public override var intrinsicContentSize: CGSize {
-        return containerStackView.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
+        return mainStackView.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
     }
 }
 
