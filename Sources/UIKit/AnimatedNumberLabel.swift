@@ -50,7 +50,12 @@ public class AnimatedNumberLabel: UIView {
     /// The current text being displayed.
     public private(set) var text: String = ""
 
+    /// The current attributed text being displayed.
+    /// When set, this takes precedence over `bonMotStyle`.
+    public private(set) var attributedText: NSAttributedString?
+
     /// A string style applied to all character labels.
+    /// Ignored if `attributedText` is set directly.
     public var bonMotStyle: StringStyle? {
         didSet {
             applyStyleToAllLabels()
@@ -194,9 +199,31 @@ public class AnimatedNumberLabel: UIView {
         setText(formattedText, animated: animated, completion: completion)
     }
 
+    /// Sets the attributed text with optional animation.
+    /// When using this method, each character preserves its individual attributes.
+    /// - Parameters:
+    ///   - newAttributedText: The new attributed text to display.
+    ///   - animated: If true, changed characters will animate with a roll-up effect.
+    ///   - completion: Called when the animation completes.
+    public func setAttributedText(_ newAttributedText: NSAttributedString, animated: Bool, completion: (() -> Void)? = nil) {
+        let oldText = text
+        let newText = newAttributedText.string
+        text = newText
+        attributedText = newAttributedText
+
+        if !animated || oldText.isEmpty {
+            rebuildLabelsWithAttributedText(newAttributedText)
+            completion?()
+            return
+        }
+
+        animateAttributedTextChange(from: oldText, to: newAttributedText, completion: completion)
+    }
+
     // MARK: - Private Methods
 
     private func rebuildLabels(for text: String) {
+        attributedText = nil
         // Remove all existing containers
         characterContainers.forEach { $0.removeFromSuperview() }
         characterContainers.removeAll()
@@ -209,11 +236,43 @@ public class AnimatedNumberLabel: UIView {
         }
     }
 
+    private func rebuildLabelsWithAttributedText(_ attributedText: NSAttributedString) {
+        // Remove all existing containers
+        characterContainers.forEach { $0.removeFromSuperview() }
+        characterContainers.removeAll()
+
+        // Create new containers for each character with its attributes
+        attributedText.string.enumerated().forEach { index, char in
+            let charAttributedString = attributedText.attributedSubstring(from: NSRange(location: index, length: 1))
+            let container = createCharacterContainer(withAttributedText: charAttributedString)
+            containerStackView.addArrangedSubview(container)
+            characterContainers.append(container)
+        }
+    }
+
     private func createCharacterContainer(for character: String) -> CharacterContainerView {
         let container = CharacterContainerView()
         container.clipsToBounds = true
 
         let label = createLabel(for: character)
+        container.currentLabel = label
+        container.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: container.topAnchor),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+        ])
+
+        return container
+    }
+
+    private func createCharacterContainer(withAttributedText attributedText: NSAttributedString) -> CharacterContainerView {
+        let container = CharacterContainerView()
+        container.clipsToBounds = true
+
+        let label = createLabel(withAttributedText: attributedText)
         container.currentLabel = label
         container.addSubview(label)
 
@@ -239,6 +298,14 @@ public class AnimatedNumberLabel: UIView {
             label.textColor = textColor
         }
 
+        label.textAlignment = .center
+        return label
+    }
+
+    private func createLabel(withAttributedText attributedText: NSAttributedString) -> UILabel {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.attributedText = attributedText
         label.textAlignment = .center
         return label
     }
@@ -306,6 +373,66 @@ public class AnimatedNumberLabel: UIView {
                 // Update non-animated characters
                 if let label = characterContainers[index].currentLabel {
                     updateLabel(label, with: String(char))
+                }
+            }
+        }
+
+        animationGroup.notify(queue: .main) {
+            completion?()
+        }
+    }
+
+    private func animateAttributedTextChange(from oldText: String, to newAttributedText: NSAttributedString, completion: (() -> Void)?) {
+        let oldChars = Array(oldText)
+        let newText = newAttributedText.string
+        let newChars = Array(newText)
+
+        // Find the differences
+        let maxLength = max(oldChars.count, newChars.count)
+        var changedIndices: [Int] = []
+
+        // Align from the end for currency-like numbers
+        let oldOffset = maxLength - oldChars.count
+        let newOffset = maxLength - newChars.count
+
+        for i in 0..<maxLength {
+            let oldIndex = i - oldOffset
+            let newIndex = i - newOffset
+
+            let oldChar: Character? = (oldIndex >= 0 && oldIndex < oldChars.count) ? oldChars[oldIndex] : nil
+            let newChar: Character? = (newIndex >= 0 && newIndex < newChars.count) ? newChars[newIndex] : nil
+
+            if oldChar != newChar {
+                changedIndices.append(i)
+            }
+        }
+
+        // If length changed significantly, just rebuild
+        if abs(oldChars.count - newChars.count) > 2 || changedIndices.count > newChars.count / 2 {
+            rebuildWithAttributedAnimation(to: newAttributedText, completion: completion)
+            return
+        }
+
+        // Adjust containers if needed
+        adjustContainerCount(to: newChars.count)
+
+        // Animate changed characters
+        let animationGroup = DispatchGroup()
+
+        for (index, char) in newChars.enumerated() {
+            let oldIndex = index - newOffset + oldOffset
+            let oldChar: Character? = (oldIndex >= 0 && oldIndex < oldChars.count) ? oldChars[oldIndex] : nil
+            let charAttributedString = newAttributedText.attributedSubstring(from: NSRange(location: index, length: 1))
+
+            if oldChar != char {
+                animationGroup.enter()
+                animateCharacter(at: index, from: oldChar.map { String($0) }, toAttributedText: charAttributedString) {
+                    animationGroup.leave()
+                }
+            } else if index < characterContainers.count {
+                // Update non-animated characters with their attributes
+                if let label = characterContainers[index].currentLabel {
+                    label.attributedText = charAttributedString
                 }
             }
         }
@@ -393,6 +520,89 @@ public class AnimatedNumberLabel: UIView {
             // Roll up when increasing, down when decreasing
             return newDigit > oldDigit
         }
+    }
+
+    private func animateCharacter(at index: Int, from oldChar: String?, toAttributedText newAttributedText: NSAttributedString, completion: @escaping () -> Void) {
+        guard index < characterContainers.count else {
+            completion()
+            return
+        }
+
+        let container = characterContainers[index]
+        let oldLabel = container.currentLabel
+
+        // Determine roll direction
+        let shouldRollUp = determineRollDirection(from: oldChar, to: newAttributedText.string)
+
+        // Create new label with attributed text
+        let newLabel = createLabel(withAttributedText: newAttributedText)
+        container.addSubview(newLabel)
+
+        NSLayoutConstraint.activate([
+            newLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            newLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            newLabel.heightAnchor.constraint(equalTo: container.heightAnchor),
+        ])
+
+        // Position new label based on roll direction
+        let initialOffset = shouldRollUp ? container.bounds.height : -container.bounds.height
+        let topConstraint = newLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: initialOffset)
+        topConstraint.isActive = true
+
+        container.layoutIfNeeded()
+
+        // Animate
+        UIView.animate(withDuration: animationDuration, delay: 0, options: animationCurve, animations: {
+            // Move old label out
+            if let oldLabel = oldLabel {
+                let exitOffset = shouldRollUp ? -container.bounds.height : container.bounds.height
+                oldLabel.transform = CGAffineTransform(translationX: 0, y: exitOffset)
+                oldLabel.alpha = 0
+            }
+
+            // Move new label into position
+            topConstraint.constant = 0
+            container.layoutIfNeeded()
+        }, completion: { _ in
+            oldLabel?.removeFromSuperview()
+            container.currentLabel = newLabel
+            completion()
+        })
+    }
+
+    private func rebuildWithAttributedAnimation(to newAttributedText: NSAttributedString, shouldRollUp: Bool = true, completion: (() -> Void)?) {
+        let oldContainers = characterContainers
+        characterContainers = []
+
+        let rollUp = (rollDirection == .down) ? false : shouldRollUp
+
+        // Create new containers with attributed text
+        newAttributedText.string.enumerated().forEach { index, _ in
+            let charAttributedString = newAttributedText.attributedSubstring(from: NSRange(location: index, length: 1))
+            let container = createCharacterContainer(withAttributedText: charAttributedString)
+            container.alpha = 0
+            let initialOffset = rollUp ? bounds.height / 2 : -bounds.height / 2
+            container.transform = CGAffineTransform(translationX: 0, y: initialOffset)
+            containerStackView.addArrangedSubview(container)
+            characterContainers.append(container)
+        }
+
+        UIView.animate(withDuration: animationDuration, delay: 0, options: animationCurve, animations: {
+            // Fade out old
+            let exitOffset = rollUp ? -self.bounds.height / 2 : self.bounds.height / 2
+            for container in oldContainers {
+                container.alpha = 0
+                container.transform = CGAffineTransform(translationX: 0, y: exitOffset)
+            }
+            // Fade in new
+            for container in self.characterContainers {
+                container.alpha = 1
+                container.transform = .identity
+            }
+        }, completion: { _ in
+            oldContainers.forEach { $0.removeFromSuperview() }
+            completion?()
+        })
     }
 
     private func rebuildWithAnimation(to newText: String, shouldRollUp: Bool = true, completion: (() -> Void)?) {
