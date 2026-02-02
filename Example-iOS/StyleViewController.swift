@@ -38,6 +38,7 @@ class StyleViewController: UITableViewController {
             DemoStrings.stylisticAlternatesExample,
             ]),
         ("Accessibility Speech", DemoStrings.accessibilitySpeechExamples),
+        ("Animated Numbers", [DemoStrings.animatedNumberExample]),
     ]
 
     override func viewDidLoad() {
@@ -52,13 +53,18 @@ class StyleViewController: UITableViewController {
         }
         let attributedText = styles[indexPath.section].1[indexPath.row]
         cell.titleLabel?.attributedText = attributedText.adapted(to: traitCollection)
-        cell.accessoryType = attributedText.attribute("Storyboard", at: 0, effectiveRange: nil) == nil ? .none : .disclosureIndicator
+        let hasStoryboard = attributedText.attribute("Storyboard", at: 0, effectiveRange: nil) != nil
+        let hasViewControllerClass = attributedText.attribute("ViewControllerClass", at: 0, effectiveRange: nil) != nil
+        cell.accessoryType = (hasStoryboard || hasViewControllerClass) ? .disclosureIndicator : .none
         return cell
     }
 
     override func tableView(_ tableView: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
         let attributedText = styles[indexPath.section].1[indexPath.row]
         if attributedText.attribute("Storyboard", at: 0, effectiveRange: nil) is String {
+            return true
+        }
+        if attributedText.attribute("ViewControllerClass", at: 0, effectiveRange: nil) is String {
             return true
         }
         return false
@@ -72,8 +78,21 @@ class StyleViewController: UITableViewController {
             }
             navigationController?.pushViewController(nextVC, animated: true)
         }
+        else if let className = attributedText.attribute("ViewControllerClass", at: 0, effectiveRange: nil) as? String {
+            let nextVC = instantiateViewController(className: className)
+            navigationController?.pushViewController(nextVC, animated: true)
+        }
         else {
             tableView.deselectRow(at: indexPath, animated: true)
+        }
+    }
+
+    private func instantiateViewController(className: String) -> UIViewController {
+        switch className {
+        case "AnimatedNumberDemoViewController":
+            return AnimatedNumberDemoViewController()
+        default:
+            fatalError("Unknown view controller class: \(className)")
         }
     }
 }

@@ -390,6 +390,11 @@ enum DemoStrings {
         )
     }()
 
+    /// Demonstrate AnimatedNumberLabel which displays numbers with rolling animation.
+    /// When values change, only the modified digits animate.
+    static let animatedNumberExample = DemoStrings.customClass(className: "AnimatedNumberDemoViewController")
+        .attributedString(from: "Animated Number Label (tap to see demo)")
+
     // Demonstrate accessibility speech attributes.
     static let accessibilitySpeechExamples: [NSAttributedString] = {
 
@@ -448,6 +453,14 @@ extension DemoStrings {
     /// - Returns: A string style that contains the extra storyboard attribute.
     static func customStoryboard(identifier theIdentifier: String) -> StringStyle {
         return StringStyle(.extraAttributes(["Storyboard": theIdentifier]))
+    }
+
+    /// Embed an attribute for a view controller class name to instantiate.
+    ///
+    /// - Parameter className: The class name of the view controller.
+    /// - Returns: A string style that contains the class name attribute.
+    static func customClass(className: String) -> StringStyle {
+        return StringStyle(.extraAttributes(["ViewControllerClass": className]))
     }
 
 }
